@@ -49,6 +49,42 @@ app.get('/search', {
   return { results: [`stub result for "${q}"`] };
 });
 
+app.get('/users/:id', {
+  schema: {
+    params: z.object({
+      id: z.string().regex(/^\d+$/, 'id must be numeric'),
+    }),
+  },
+}, async (request, reply) => {
+  const { id } = request.params;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const response = await fetch(
+      `https://jsonplaceholder.typicode.com/users/${id}`,
+      { signal: controller.signal }
+    );
+
+    if (!response.ok) {
+      return reply.code(response.status).send({
+        error: 'Upstream error',
+        status: response.status,
+      });
+    }
+
+    return await response.json();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      return reply.code(504).send({ error: 'Upstream timeout' });
+    }
+    return reply.code(502).send({ error: 'Failed to reach upstream' });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+});
+
 const port = Number(process.env.PORT) || 3000;
 
 app.listen({ port, host: '0.0.0.0' }).catch((err) => {
