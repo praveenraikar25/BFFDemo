@@ -118,9 +118,33 @@ const tvShowSchema = z.object({
   firstAirDate: z.string(),
   voteAverage: z.number(),
   posterUrl: z.string().nullable(),
+  genres: z.array(z.string()),
 });
 
 const upstreamErrorSchema = z.object({ error: z.string() });
+
+let genreMapPromise: Promise<Map<number, string>> | null = null;
+
+async function getTvGenreMap(): Promise<Map<number, string>> {
+  if (!genreMapPromise) {
+    genreMapPromise = fetchUpstream('https://api.themoviedb.org/3/genre/tv/list?language=en-US', {
+      headers: {
+        Authorization: `Bearer ${TMDB_READ_TOKEN}`,
+        Accept: 'application/json',
+      },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`TMDB genre list error: ${response.status}`);
+        const data = await response.json();
+        return new Map<number, string>(data.genres.map((g: { id: number; name: string }) => [g.id, g.name]));
+      })
+      .catch((err) => {
+        genreMapPromise = null;
+        throw err;
+      });
+  }
+  return genreMapPromise;
+}
 
 app.get('/tv/top', {
   schema: {
@@ -162,6 +186,7 @@ app.get('/tv/top', {
     }
 
     const data = await response.json();
+    const genreMap = await getTvGenreMap();
 
     return {
       page: data.page,
@@ -174,6 +199,7 @@ app.get('/tv/top', {
         firstAirDate: show.first_air_date,
         voteAverage: show.vote_average,
         posterUrl: show.poster_path ? `${TMDB_IMAGE_BASE}${show.poster_path}` : null,
+        genres: (show.genre_ids ?? []).map((id: number) => genreMap.get(id) ?? 'Unknown'),
       })),
     };
   } catch (err) {
