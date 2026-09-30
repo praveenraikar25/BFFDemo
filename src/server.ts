@@ -6,6 +6,7 @@ import {
   ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { registerTvRoutes } from './routes/tv.js';
 
 if (existsSync('.env')) {
   process.loadEnvFile('.env');
@@ -109,106 +110,7 @@ app.get('/users/:id', {
   }
 });
 
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
-
-const tvShowSchema = z.object({
-  id: z.number(),
-  name: z.string(),
-  overview: z.string(),
-  firstAirDate: z.string(),
-  voteAverage: z.number(),
-  posterUrl: z.string().nullable(),
-  genres: z.array(z.string()),
-});
-
-const upstreamErrorSchema = z.object({ error: z.string() });
-
-let genreMapPromise: Promise<Map<number, string>> | null = null;
-
-async function getTvGenreMap(): Promise<Map<number, string>> {
-  if (!genreMapPromise) {
-    genreMapPromise = fetchUpstream('https://api.themoviedb.org/3/genre/tv/list?language=en-US', {
-      headers: {
-        Authorization: `Bearer ${TMDB_READ_TOKEN}`,
-        Accept: 'application/json',
-      },
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`TMDB genre list error: ${response.status}`);
-        const data = await response.json();
-        return new Map<number, string>(data.genres.map((g: { id: number; name: string }) => [g.id, g.name]));
-      })
-      .catch((err) => {
-        genreMapPromise = null;
-        throw err;
-      });
-  }
-  return genreMapPromise;
-}
-
-app.get('/tv/top', {
-  schema: {
-    querystring: z.object({
-      page: z.coerce.number().int().min(1).max(500).default(1),
-    }),
-    response: {
-      200: z.object({
-        page: z.number(),
-        totalPages: z.number(),
-        totalResults: z.number(),
-        results: z.array(tvShowSchema),
-      }),
-      500: upstreamErrorSchema,
-      502: upstreamErrorSchema,
-      504: upstreamErrorSchema,
-    },
-  },
-}, async (request, reply) => {
-  const { page } = request.query;
-
-  try {
-    const response = await fetchUpstream(
-      `https://api.themoviedb.org/3/tv/top_rated?language=en-US&page=${page}`,
-      {
-        headers: {
-          Authorization: `Bearer ${TMDB_READ_TOKEN}`,
-          Accept: 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      request.log.error({ status: response.status }, 'TMDB upstream error');
-      // A rejected token is our config bug, not the caller's — don't echo 401 back.
-      return response.status === 401
-        ? reply.code(500).send({ error: 'Upstream auth failed' })
-        : reply.code(502).send({ error: 'Upstream error' });
-    }
-
-    const data = await response.json();
-    const genreMap = await getTvGenreMap();
-
-    return {
-      page: data.page,
-      totalPages: data.total_pages,
-      totalResults: data.total_results,
-      results: data.results.map((show: any) => ({
-        id: show.id,
-        name: show.name,
-        overview: show.overview,
-        firstAirDate: show.first_air_date,
-        voteAverage: show.vote_average,
-        posterUrl: show.poster_path ? `${TMDB_IMAGE_BASE}${show.poster_path}` : null,
-        genres: (show.genre_ids ?? []).map((id: number) => genreMap.get(id) ?? 'Unknown'),
-      })),
-    };
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      return reply.code(504).send({ error: 'Upstream timeout' });
-    }
-    return reply.code(502).send({ error: 'Failed to reach upstream' });
-  }
-});
+registerTvRoutes(app, { fetchUpstream, tmdbReadToken: TMDB_READ_TOKEN });
 
 const port = Number(process.env.PORT) || 3000;
 
