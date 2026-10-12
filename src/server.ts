@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs';
 import Fastify from 'fastify';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import {
+  jsonSchemaTransform,
   serializerCompiler,
   validatorCompiler,
   ZodTypeProvider,
@@ -30,6 +33,47 @@ const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
 
+// Swagger must be registered before the routes so it can collect their schemas.
+await app.register(fastifySwagger, {
+  openapi: {
+    info: { title: 'demo-bff', version: '1.0.0' },
+    tags: [
+      { name: 'system', description: 'Service health' },
+      { name: 'movies', description: 'Movie lookups' },
+      { name: 'users', description: 'Users proxied from JSONPlaceholder' },
+      { name: 'tv', description: 'TV series from TMDB' },
+    ],
+  },
+  transform: jsonSchemaTransform,
+});
+await app.register(fastifySwaggerUi, { routePrefix: '/docs' });
+
+const errorSchema = z.object({
+  error: z.string(),
+  status: z.number().optional(),
+});
+
+const userSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  username: z.string(),
+  email: z.string(),
+  address: z.object({
+    street: z.string(),
+    suite: z.string(),
+    city: z.string(),
+    zipcode: z.string(),
+    geo: z.object({ lat: z.string(), lng: z.string() }),
+  }),
+  phone: z.string(),
+  website: z.string(),
+  company: z.object({
+    name: z.string(),
+    catchPhrase: z.string(),
+    bs: z.string(),
+  }),
+});
+
 const UPSTREAM_TIMEOUT_MS = 3000;
 
 async function fetchUpstream(url: string, init?: RequestInit) {
@@ -42,12 +86,20 @@ async function fetchUpstream(url: string, init?: RequestInit) {
   }
 }
 
-app.get('/health', async () => {
-  return { status: 'ok' };
+app.get('/health', {
+  schema: {
+    tags: ['system'],
+    summary: 'Health check',
+    response: { 200: z.object({ status: z.literal('ok') }) },
+  },
+}, async () => {
+  return { status: 'ok' as const };
 });
 
 app.get('/movies/:id', {
   schema: {
+    tags: ['movies'],
+    summary: 'Get a movie by id (stub)',
     params: z.object({
       id: z.string().regex(/^\d+$/, 'id must be numeric'),
     }),
@@ -65,6 +117,8 @@ app.get('/movies/:id', {
 
 app.get('/search', {
   schema: {
+    tags: ['movies'],
+    summary: 'Search movies (stub)',
     querystring: z.object({
       q: z.string().min(1, 'q is required'),
       limit: z.coerce.number().int().positive().max(50).optional(),
@@ -82,9 +136,18 @@ app.get('/search', {
 
 app.get('/users/:id', {
   schema: {
+    tags: ['users'],
+    summary: 'Get a user by id',
+    description: 'Proxies https://jsonplaceholder.typicode.com/users/:id.',
     params: z.object({
       id: z.string().regex(/^\d+$/, 'id must be numeric'),
     }),
+    response: {
+      200: userSchema,
+      404: errorSchema,
+      502: errorSchema,
+      504: errorSchema,
+    },
   },
 }, async (request, reply) => {
   const { id } = request.params;
@@ -95,7 +158,7 @@ app.get('/users/:id', {
     );
 
     if (!response.ok) {
-      return reply.code(response.status).send({
+      return reply.code(response.status as 404).send({
         error: 'Upstream error',
         status: response.status,
       });

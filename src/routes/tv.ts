@@ -51,6 +51,9 @@ export function registerTvRoutes(
 
   app.get('/tv/top', {
     schema: {
+      tags: ['tv'],
+      summary: 'Top-rated TV series',
+      description: `Clients must send x-app-version >= ${MIN_APP_VERSION}; otherwise an empty result is returned without calling TMDB.`,
       querystring: z.object({
         page: z.coerce.number().int().min(1).max(500).default(1),
       }),
