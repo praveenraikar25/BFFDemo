@@ -9,6 +9,7 @@ import {
   ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { createAuthGuard, createFirebaseIdTokenVerifier } from './auth.js';
 import { registerTvRoutes } from './routes/tv.js';
 
 if (existsSync('.env')) {
@@ -19,6 +20,9 @@ const env = z.object({
   TMDB_READ_TOKEN: z
     .string({ error: 'TMDB_READ_TOKEN is required — copy .env.example to .env' })
     .min(1, 'TMDB_READ_TOKEN must not be empty'),
+  FIREBASE_PROJECT_ID: z
+    .string({ error: 'FIREBASE_PROJECT_ID is required — copy .env.example to .env' })
+    .min(1, 'FIREBASE_PROJECT_ID must not be empty'),
 }).safeParse(process.env);
 
 if (!env.success) {
@@ -26,7 +30,7 @@ if (!env.success) {
   process.exit(1);
 }
 
-const { TMDB_READ_TOKEN } = env.data;
+const { TMDB_READ_TOKEN, FIREBASE_PROJECT_ID } = env.data;
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 
@@ -43,6 +47,11 @@ await app.register(fastifySwagger, {
       { name: 'users', description: 'Users proxied from JSONPlaceholder' },
       { name: 'tv', description: 'TV series from TMDB' },
     ],
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'Firebase ID token' },
+      },
+    },
   },
   transform: jsonSchemaTransform,
 });
@@ -173,7 +182,11 @@ app.get('/users/:id', {
   }
 });
 
-registerTvRoutes(app, { fetchUpstream, tmdbReadToken: TMDB_READ_TOKEN });
+const authGuard = createAuthGuard({
+  verifyIdToken: createFirebaseIdTokenVerifier(FIREBASE_PROJECT_ID),
+});
+
+registerTvRoutes(app, { fetchUpstream, tmdbReadToken: TMDB_READ_TOKEN, authGuard });
 
 const port = Number(process.env.PORT) || 3000;
 
