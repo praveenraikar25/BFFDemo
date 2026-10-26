@@ -29,7 +29,7 @@ The project has no test runner. Verification uses `npm run build` (type-check) a
 
 - [x] 5.1 Add the `bearerAuth` security scheme to the Swagger config in `src/server.ts` (design D6). Verify that `/docs` shows the lock on `GET /tv/top` with a 401 response, that no lock is shown on `/health`, and that "Authorize" with a token makes "Try it out" return 200.
 - [x] 5.2 Update `CLAUDE.md`. Add `FIREBASE_PROJECT_ID` to Setup. Describe the auth guard: its `onRequest` opt-in, its injection via deps, and that every verification failure, including key download failures, returns 401. Note that `/tv/top` checks auth before the version gate. Verify by rereading it against the implemented code.
-- [ ] 5.3 Write a short client integration note for the app team in the PR description. Cover sending `Authorization: Bearer <idToken>`, calling `getIdToken()` before each request, and on 401 retrying once with `getIdToken(true)` before sending the user to sign-in. Also flag that old builds now get 401. Verify that the note is included in the PR description.
+- [x] 5.3 Write a short client integration note for the app team in the PR description. Cover sending `Authorization: Bearer <idToken>`, calling `getIdToken()` before each request, and on 401 retrying once with `getIdToken(true)` before sending the user to sign-in. Also flag that old builds now get 401. Verify that the note is included in the PR description.
 
 ## Workflow follow-up
 
