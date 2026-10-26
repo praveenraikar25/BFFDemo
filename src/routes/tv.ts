@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
@@ -20,11 +20,12 @@ const upstreamErrorSchema = z.object({ error: z.string() });
 interface TvRouteDeps {
   fetchUpstream: (url: string, init?: RequestInit) => Promise<Response>;
   tmdbReadToken: string;
+  authGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
 export function registerTvRoutes(
   app: FastifyInstance<any, any, any, any, ZodTypeProvider>,
-  { fetchUpstream, tmdbReadToken }: TvRouteDeps
+  { fetchUpstream, tmdbReadToken, authGuard }: TvRouteDeps
 ) {
   let genreMapPromise: Promise<Map<number, string>> | null = null;
 
@@ -50,10 +51,12 @@ export function registerTvRoutes(
   }
 
   app.get('/tv/top', {
+    onRequest: authGuard,
     schema: {
       tags: ['tv'],
       summary: 'Top-rated TV series',
-      description: `Clients must send x-app-version >= ${MIN_APP_VERSION}; otherwise an empty result is returned without calling TMDB.`,
+      description: `Requires a Firebase ID token as a Bearer token; it is checked before anything else, so missing or invalid tokens get 401. Authenticated clients must send x-app-version >= ${MIN_APP_VERSION}; otherwise an empty result is returned without calling TMDB.`,
+      security: [{ bearerAuth: [] }],
       querystring: z.object({
         page: z.coerce.number().int().min(1).max(500).default(1),
       }),
@@ -67,6 +70,7 @@ export function registerTvRoutes(
           totalResults: z.number(),
           results: z.array(tvShowSchema),
         }),
+        401: upstreamErrorSchema,
         500: upstreamErrorSchema,
         502: upstreamErrorSchema,
         504: upstreamErrorSchema,
