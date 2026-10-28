@@ -10,6 +10,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { createAuthGuard, createFirebaseIdTokenVerifier } from './auth.js';
+import { createNoopCache, createRedisCache } from './cache.js';
 import { registerTvRoutes } from './routes/tv.js';
 
 if (existsSync('.env')) {
@@ -23,6 +24,14 @@ const env = z.object({
   FIREBASE_PROJECT_ID: z
     .string({ error: 'FIREBASE_PROJECT_ID is required — copy .env.example to .env' })
     .min(1, 'FIREBASE_PROJECT_ID must not be empty'),
+  // Optional: unset or empty runs the service uncached.
+  REDIS_URL: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined)
+    .refine((value) => value === undefined || /^rediss?:\/\/.+/.test(value), {
+      error: 'REDIS_URL must be a redis:// or rediss:// URL',
+    }),
 }).safeParse(process.env);
 
 if (!env.success) {
@@ -30,7 +39,7 @@ if (!env.success) {
   process.exit(1);
 }
 
-const { TMDB_READ_TOKEN, FIREBASE_PROJECT_ID } = env.data;
+const { TMDB_READ_TOKEN, FIREBASE_PROJECT_ID, REDIS_URL } = env.data;
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 
@@ -186,11 +195,19 @@ const authGuard = createAuthGuard({
   verifyIdToken: createFirebaseIdTokenVerifier(FIREBASE_PROJECT_ID),
 });
 
-registerTvRoutes(app, { fetchUpstream, tmdbReadToken: TMDB_READ_TOKEN, authGuard });
+const cache = REDIS_URL ? createRedisCache(REDIS_URL, app.log) : createNoopCache();
+app.addHook('onClose', async () => {
+  await cache.close();
+});
+
+registerTvRoutes(app, { fetchUpstream, tmdbReadToken: TMDB_READ_TOKEN, authGuard, cache });
 
 const port = Number(process.env.PORT) || 3000;
 
-app.listen({ port, host: '0.0.0.0' }).catch((err) => {
-  app.log.error(err);
-  process.exit(1);
-});
+app.listen({ port, host: '0.0.0.0' })
+  // Connect after listening so an unreachable Redis can never delay or block startup.
+  .then(() => cache.connect())
+  .catch((err) => {
+    app.log.error(err);
+    process.exit(1);
+  });

@@ -1,9 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { Cache } from '../cache.js';
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
 const MIN_APP_VERSION = 2; // clients below this get an empty /tv/top response
+const TOP_RATED_CACHE_TTL_SECONDS = 3600;
+// Bump the version segment to invalidate every cached top-rated page.
+const topRatedCacheKey = (page: number) => `demo-bff:v1:tmdb:tv:top_rated:en-US:page=${page}`;
 
 const tvShowSchema = z.object({
   id: z.number(),
@@ -21,11 +25,12 @@ interface TvRouteDeps {
   fetchUpstream: (url: string, init?: RequestInit) => Promise<Response>;
   tmdbReadToken: string;
   authGuard: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+  cache: Cache;
 }
 
 export function registerTvRoutes(
   app: FastifyInstance<any, any, any, any, ZodTypeProvider>,
-  { fetchUpstream, tmdbReadToken, authGuard }: TvRouteDeps
+  { fetchUpstream, tmdbReadToken, authGuard, cache }: TvRouteDeps
 ) {
   let genreMapPromise: Promise<Map<number, string>> | null = null;
 
@@ -85,25 +90,42 @@ export function registerTvRoutes(
     }
 
     try {
-      const response = await fetchUpstream(
-        `https://api.themoviedb.org/3/tv/top_rated?language=en-US&page=${page}`,
-        {
-          headers: {
-            Authorization: `Bearer ${tmdbReadToken}`,
-            Accept: 'application/json',
-          },
+      // The cache never throws; an unreadable or corrupt entry is just a miss.
+      const cacheKey = topRatedCacheKey(page);
+      let data: any = null;
+      const cached = await cache.get(cacheKey);
+      if (cached !== null) {
+        try {
+          data = JSON.parse(cached);
+        } catch {
+          request.log.warn({ key: cacheKey }, 'Ignoring unparsable cache entry');
         }
-      );
-
-      if (!response.ok) {
-        request.log.error({ status: response.status }, 'TMDB upstream error');
-        // A rejected token is our config bug, not the caller's — don't echo 401 back.
-        return response.status === 401
-          ? reply.code(500).send({ error: 'Upstream auth failed' })
-          : reply.code(502).send({ error: 'Upstream error' });
       }
 
-      const data = await response.json();
+      if (data === null) {
+        const response = await fetchUpstream(
+          `https://api.themoviedb.org/3/tv/top_rated?language=en-US&page=${page}`,
+          {
+            headers: {
+              Authorization: `Bearer ${tmdbReadToken}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+
+        if (!response.ok) {
+          request.log.error({ status: response.status }, 'TMDB upstream error');
+          // A rejected token is our config bug, not the caller's — don't echo 401 back.
+          return response.status === 401
+            ? reply.code(500).send({ error: 'Upstream auth failed' })
+            : reply.code(502).send({ error: 'Upstream error' });
+        }
+
+        data = await response.json();
+        // Only successful bodies are cached; errors above return before reaching here.
+        await cache.set(cacheKey, JSON.stringify(data), TOP_RATED_CACHE_TTL_SECONDS);
+      }
+
       const genreMap = await getTvGenreMap();
 
       return {
