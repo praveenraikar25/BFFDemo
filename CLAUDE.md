@@ -7,8 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run dev` — run with hot reload (`tsx watch src/server.ts`)
 - `npm run build` — compile TypeScript to `dist/` (also runs automatically on `npm install` via `postinstall`)
 - `npm start` — run the compiled `dist/server.js`
+- `npm test` — run the Vitest suite once (`npx vitest` for watch mode)
 
-There is no test or lint setup. Type-check with `npm run build`.
+There is no lint setup. Type-check `src/` with `npm run build`; it does not cover `test/` (Vitest only strips types).
+
+## Tests
+
+Vitest tests live in `test/`, outside `src/`, so `tsc` and `dist/` ignore them. They never touch the network or Firebase: `test/helpers.ts` exports `buildApp()` (a fresh Fastify app per test with `registerTvRoutes` wired to fakes — the genre map is closure-held, so never share an app between tests), `fakeUpstream()` (routes `fetchUpstream` by URL into `topRated` / `genres` handlers that return a `Response` or throw), and TMDB fixtures. Drive routes with `app.inject()`. `server.ts` is not importable from tests (it listens and may exit at load), so new route modules should keep taking their dependencies as arguments.
 
 ## Setup
 
