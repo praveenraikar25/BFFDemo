@@ -11,6 +11,7 @@ import {
 import { z } from 'zod';
 import { createAuthGuard, createFirebaseIdTokenVerifier } from './auth.js';
 import { registerTvRoutes } from './routes/tv.js';
+import { appLinksEnvSchema, parseFingerprints, registerAppLinksRoutes } from './routes/app-links.js';
 
 if (existsSync('.env')) {
   process.loadEnvFile('.env');
@@ -23,14 +24,14 @@ const env = z.object({
   FIREBASE_PROJECT_ID: z
     .string({ error: 'FIREBASE_PROJECT_ID is required — copy .env.example to .env' })
     .min(1, 'FIREBASE_PROJECT_ID must not be empty'),
-}).safeParse(process.env);
+}).extend(appLinksEnvSchema.shape).safeParse(process.env);
 
 if (!env.success) {
   console.error('Config error:', z.flattenError(env.error).fieldErrors);
   process.exit(1);
 }
 
-const { TMDB_READ_TOKEN, FIREBASE_PROJECT_ID } = env.data;
+const { TMDB_READ_TOKEN, FIREBASE_PROJECT_ID, ANDROID_SHA256_CERT_FINGERPRINTS, APP_STORE_URL } = env.data;
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 
@@ -46,6 +47,7 @@ await app.register(fastifySwagger, {
       { name: 'movies', description: 'Movie lookups' },
       { name: 'users', description: 'Users proxied from JSONPlaceholder' },
       { name: 'tv', description: 'TV series from TMDB' },
+      { name: 'app-links', description: 'Android App Links verification and web fallback' },
     ],
     components: {
       securitySchemes: {
@@ -187,6 +189,21 @@ const authGuard = createAuthGuard({
 });
 
 registerTvRoutes(app, { fetchUpstream, tmdbReadToken: TMDB_READ_TOKEN, authGuard });
+
+// Fingerprints are public certificate hashes, so logging them is safe.
+const fingerprints = parseFingerprints(ANDROID_SHA256_CERT_FINGERPRINTS);
+if (fingerprints.invalid.length > 0) {
+  app.log.warn(
+    { rejected: fingerprints.invalid },
+    'Ignoring invalid ANDROID_SHA256_CERT_FINGERPRINTS entries (expected 32 uppercase hex pairs separated by colons)'
+  );
+}
+if (fingerprints.valid.length === 0) {
+  app.log.error('No valid Android signing fingerprints; assetlinks.json will not verify any app');
+}
+app.log.info({ sha256CertFingerprints: fingerprints.valid }, 'Serving Android App Links fingerprints');
+
+registerAppLinksRoutes(app, { sha256CertFingerprints: fingerprints.valid, appStoreUrl: APP_STORE_URL });
 
 const port = Number(process.env.PORT) || 3000;
 
